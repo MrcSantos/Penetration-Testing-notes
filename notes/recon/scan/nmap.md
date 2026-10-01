@@ -16,7 +16,10 @@ Command that covers 90% of use cases:
 sudo nmap --reason -p- -T4 -sV -n --script="default,auth,discovery,safe,vuln,vulners,exploit" -iL targets.txt
 ```
 
-
+From gnmap to list of open host:port
+```
+awk '/^Host: .*Status: Up/ { ip=$2 } /^Host: .*Ports:/ { for (i=1; i<=NF; i++) if ($i ~ /^[0-9]+\/open\/tcp/) { split($i,p,"/"); print ip ":" p[1] } }'
+```
 
 ----------
 
