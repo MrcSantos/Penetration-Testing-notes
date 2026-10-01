@@ -13,7 +13,7 @@ It uses raw IP packets to determine what hosts are available on the network, wha
 Command that covers 90% of use cases:
 
 ```
-sudo nmap --reason -p- -T4 -sV -n --script="default,auth,discovery,safe,vuln,vulners,exploit" -iL targets.txt
+sudo nmap --reason --osscan-limit --max-os-tries 1 -p- -T4 -sV -n --script="default,auth,discovery,safe,vuln,vulners,exploit" -iL targets.txt
 ```
 
 From gnmap to list of open host:port
