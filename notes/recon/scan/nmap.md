@@ -25,6 +25,10 @@ awk '/^Host: .*Status: Up/ { ip=$2 } /^Host: .*Ports:/ { for (i=1; i<=NF; i++) i
 
 #### Notes
 
+Instead of ```-T4``` you can put ```--min-rate 10000```.
+
+```--min-rate 10000``` is a good start for maximum speed, going faster should produce false positives and not detect true positives.
+
 ----------
 
 #### Resources:
