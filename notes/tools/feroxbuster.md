@@ -9,7 +9,9 @@ Feroxbuster is a tool designed to perform Forced Browsing. Forced browsing is an
 
 #### Cheatsheet
 
-
+```
+feroxbuster -u http://<domain>
+```
 
 ----------
 
