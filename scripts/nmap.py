@@ -3,6 +3,7 @@
 import argparse
 import sys
 from pathlib import Path
+import datetime
 
 #---------- Initialized later env variables ----------#
 
@@ -12,13 +13,32 @@ LOG_FILENAME = ""
 
 #---------- Logger ----------#
 
-def write_to_log_file(message: str) -> None:
-    with open(LOG_FILENAME, "a") as f:
-        f.write(f"{message}\n")
+def write_to_log_file(message: str, write_timestamp: bool = True) -> None:
+    """Writes line to log file"""
+
+    if write_timestamp:
+        now = datetime.datetime.now()
+        now_str = now.strftime("%x %X")
+
+        with open(LOG_FILENAME, "a") as f:
+            f.write(f"[{now_str}] {message}\n")
+
+    else:
+        with open(LOG_FILENAME, "a") as f:
+            f.write(f"{message}\n")
+
+def end_log_file() -> None:
+    """Writes end lines of log file"""
+
+    write_to_log_file("Shutting down scanner")
 
 def init_log_file() -> None:
     """Create a new log file and write the initial message."""
-    write_to_log_file("Hello world!")
+
+    write_to_log_file("", write_timestamp=False)
+    write_to_log_file("", write_timestamp=False)
+    write_to_log_file("-- Harmony scanner --", write_timestamp=False)
+    write_to_log_file("Starting scanner")
 
 #---------- Logger ----------#
 
@@ -28,8 +48,10 @@ def main(args: argparse.Namespace) -> int:
     try:
         global LOG_FILENAME
         LOG_FILENAME = args.log
+
         init_log_file()
-        print(f"Log file created successfully: {LOG_FILENAME}")
+
+        end_log_file()
     except (ValueError, OSError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1
@@ -49,8 +71,8 @@ def parse_arguments() -> argparse.Namespace:
         "-l",
         "--log",
         type=Path,
-        default=Path("./fscanner.log"),
-        help="Path to the log file (default: ./fscanner.log).",
+        default=Path("./harmony.log"),
+        help="Path to the log file (default: ./harmony.log).",
     )
 
     return parser.parse_args()
