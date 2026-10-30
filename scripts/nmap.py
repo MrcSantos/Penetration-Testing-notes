@@ -27,10 +27,12 @@ def write_to_log_file(message: str, write_timestamp: bool = True) -> None:
         with open(LOG_FILENAME, "a") as f:
             f.write(f"{message}\n")
 
+
 def end_log_file() -> None:
     """Writes end lines of log file"""
 
     write_to_log_file("Shutting down scanner")
+
 
 def init_log_file() -> None:
     """Create a new log file and write the initial message."""
@@ -50,7 +52,6 @@ def main(args: argparse.Namespace) -> int:
         LOG_FILENAME = args.log
 
         init_log_file()
-
         end_log_file()
     except (ValueError, OSError) as error:
         print(f"Error: {error}", file=sys.stderr)
