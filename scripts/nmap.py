@@ -130,17 +130,28 @@ def run_discovery_scans(args: argparse.Namespace) -> None:
 
     write_to_log_file(f"Starting parallel discovery scans on {target_csv} with output in {output_dir}")
 
-    # Define discovery scans
-    scans = {
-        "UDP discovery": {
-            "scan_options": ["-sU", "--top-ports", "1000", "--min-rate", "5000"],
-            "output_prefix": output_dir / "discovery_udp"
-        },
-        "TCP discovery": {
-            "scan_options": ["-sS", "-p-", "--min-rate", "5000"],
-            "output_prefix": output_dir / "discovery_tcp"
+    if args.s:
+        scans = {
+            "UDP discovery": {
+                "scan_options": ["-sU", "--top-ports", "1000", "-T2", "--open", "--reason"],
+                "output_prefix": output_dir / "discovery_udp"
+            },
+            "TCP discovery": {
+                "scan_options": ["-sT", "-p-", "-T2", "--open", "--reason"],
+                "output_prefix": output_dir / "discovery_tcp"
+            }
         }
-    }
+    else:
+        scans = {
+            "UDP discovery": {
+                "scan_options": ["-sU", "--top-ports", "1000", "--min-rate", "4000", "--open", "--reason"],
+                "output_prefix": output_dir / "discovery_udp"
+            },
+            "TCP discovery": {
+                "scan_options": ["-sS", "-p-", "--min-rate", "6000", "--open", "--reason"],
+                "output_prefix": output_dir / "discovery_tcp"
+            }
+        }
 
     failures = []
 
@@ -250,6 +261,13 @@ def parse_arguments() -> argparse.Namespace:
         dest="pn",
         action="store_true",
         help="Skip Nmap host discovery.",
+    )
+
+    parser.add_argument(
+        "-s",
+        dest="s",
+        action="store_true",
+        help="Use a stealthier approach.",
     )
 
     return parser.parse_args()
