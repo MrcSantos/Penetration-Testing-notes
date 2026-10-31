@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import sys
 import threading
-
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 #---------- Initialized later env variables ----------#
@@ -34,7 +34,7 @@ def write_to_log_file(message: str, write_timestamp: bool = True) -> None:
         with LOG_FILENAME.open("a", encoding="utf-8") as log_file:
             log_file.write(f"{message}\n")
 
-    print(message)
+        print(message)
 
 
 def end_log_file() -> None:
@@ -112,6 +112,8 @@ def resolve_targets(targets: list[str]) -> list[str]:
 
 
 def get_target_description(targets: list[str]) -> str:
+    """Return a readable description of the requested targets."""
+
     if len(targets) != 1:
         return ", ".join(targets)
 
@@ -122,7 +124,124 @@ def get_target_description(targets: list[str]) -> str:
 
     return f"target file: {target_path}"
 
+
 #---------- Target handling ----------#
+
+
+#---------- XML parsing and service summaries ----------#
+
+def parse_ports_from_host(host: ET.Element[str]) -> list[int]:
+    ports_for_host = []
+    for port in host.findall("./ports/port"):
+        state = port.find("state")
+        if state is None or state.get("state") != "open":
+            continue
+
+        port_id = port.get("portid")
+        if port_id is None:
+            continue
+
+        try:
+            ports_for_host.append(int(port_id))
+        except ValueError:
+            continue
+
+    return sorted(set(ports_for_host))
+
+def parse_addresses_from_host(host: ET.Element[str]) -> list[str]:
+    addresses = []
+
+    for address in host.findall("address"):
+        address_value = address.get("addr")
+        addresses.append(address_value)
+
+    return addresses
+
+def parse_hostnames_from_host(host: ET.Element[str]) -> list[str]:
+    hostnames = []
+
+    for hostname_object in host.findall("./hostnames/hostname"):
+        hostname_value = hostname_object.get("name")
+        hostnames.append(hostname_value)
+
+    return sorted(set(hostnames))
+
+def parse_discovered_ports(xml_file: Path) -> dict[str, list[int]]:
+    """Return each host's confirmed open ports for the requested protocol."""
+
+    if not xml_file.is_file():
+        raise FileNotFoundError(f"Nmap XML output was not found: {xml_file}")
+
+    try:
+        root = ET.parse(xml_file).getroot()
+    except ET.ParseError as error:
+        raise ValueError(f"Invalid Nmap XML in {xml_file}: {error}") from error
+
+    parsed_xml_dict = {}
+
+    for host in root.findall("host"):
+        status = host.find("status")
+        if status is not None and status.get("state") != "up":
+            continue
+
+        addresses = parse_addresses_from_host(host)
+        if not addresses:
+            continue
+
+        ports_for_host = parse_ports_from_host(host)
+        if not ports_for_host:
+            continue
+
+        hostnames = parse_hostnames_from_host(host)
+
+        for hostname in hostnames:
+            parsed_xml_dict[hostname] = ports_for_host
+
+        for address in addresses:
+            parsed_xml_dict[address] = ports_for_host
+
+    return parsed_xml_dict
+
+
+def write_service_summary(
+    discovered_services: dict[str, list[int]],
+    output_file: Path
+) -> None:
+    """Write unique host:port pairs to a service summary file."""
+
+    entries = sorted(
+        f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+        for host, ports in discovered_services.items()
+        for port in ports
+    )
+
+    with output_file.open("w", encoding="utf-8") as summary_file:
+        for entry in entries:
+            summary_file.write(f"{entry}\n")
+
+    write_to_log_file(
+        f"Wrote {len(entries)} service entries to {output_file}",
+        write_timestamp=False
+    )
+
+
+def generate_services_summary(output_dir: Path) -> dict[str, dict[str, list[int]]]:
+    """Parse discovery XML and write the TCP and UDP service summaries."""
+
+    udp_services = parse_discovered_ports(
+        output_dir / "discovery_udp.xml",
+    )
+    tcp_services = parse_discovered_ports(
+        output_dir / "discovery_tcp.xml",
+    )
+
+    write_service_summary(udp_services, output_dir / "services_UDP.txt")
+    write_service_summary(tcp_services, output_dir / "services_TCP.txt")
+
+    return {"udp": udp_services, "tcp": tcp_services}
+
+
+#---------- XML parsing and service summaries ----------#
 
 
 #---------- Nmap ----------#
@@ -162,13 +281,118 @@ def run_nmap_scan(
 
     if not xml_output_file.is_file():
         error_message = (
-            f"{scan_name} scan completed but XML output was not found: {xml_output_file}"
+            f"{scan_name} scan completed but XML output was not found: "
+            f"{xml_output_file}"
         )
         write_to_log_file(error_message)
         raise RuntimeError(error_message)
 
     write_to_log_file(f"{scan_name} scan completed successfully")
     write_to_log_file(f"XML output: {xml_output_file}")
+
+
+def run_udp_script_scan(
+    host: str,
+    ports: list[int],
+    script_categories: str,
+    output_dir: Path
+) -> None:
+    """Run a UDP script scan against one host's discovered open UDP ports."""
+
+    if not ports:
+        write_to_log_file(f"Skipping UDP script scan for {host}: no open UDP ports")
+        return
+
+    output_prefix = output_dir / f"udp_scripts_{host.replace(':', '_')}"
+    port_list = ",".join(str(port) for port in sorted(set(ports)))
+
+    command = [
+        NMAP_LOCATION,
+        "-Pn",
+        "-sU",
+        "-p", port_list,
+        "--script", script_categories,
+        "-oA", str(output_prefix),
+        host
+    ]
+
+    write_to_log_file(
+        f"Starting UDP script scan for {host} on ports {port_list} "
+        f"with scripts {script_categories}"
+    )
+    write_to_log_file(f"Command: {shlex.join(command)}")
+
+    try:
+        subprocess.run(command, check=True)
+    except (OSError, subprocess.CalledProcessError) as error:
+        write_to_log_file(f"UDP script scan failed for {host}: {error}")
+        raise
+
+    xml_output_file = Path(f"{output_prefix}.xml")
+    if not xml_output_file.is_file():
+        error_message = (
+            f"UDP script scan for {host} completed but XML output was not found: "
+            f"{xml_output_file}"
+        )
+        write_to_log_file(error_message)
+        raise RuntimeError(error_message)
+
+    write_to_log_file(f"UDP script scan completed successfully for {host}")
+    write_to_log_file(f"XML output: {xml_output_file}")
+
+
+def run_udp_script_scans(
+    discovered_udp_services: dict[str, list[int]],
+    args: argparse.Namespace
+) -> None:
+    """Run one UDP script scan per host with confirmed open UDP ports."""
+
+    if args.s:
+        script_categories = "default,safe"
+    else:
+        script_categories = "default,discovery,safe,auth,vuln"
+
+    hosts_to_scan = {
+        host: ports
+        for host, ports in discovered_udp_services.items()
+        if ports
+    }
+
+    if not hosts_to_scan:
+        write_to_log_file(
+            "No confirmed open UDP ports found; skipping UDP script scans"
+        )
+        return
+
+    failures = []
+
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=min(len(hosts_to_scan), 4)
+    ) as executor:
+        futures = {
+            executor.submit(
+                run_udp_script_scan,
+                host,
+                ports,
+                script_categories,
+                args.output_dir
+            ): host
+            for host, ports in hosts_to_scan.items()
+        }
+
+        for future in concurrent.futures.as_completed(futures):
+            host = futures[future]
+            try:
+                future.result()
+            except (OSError, subprocess.CalledProcessError, RuntimeError) as error:
+                failures.append(f"{host}: {error}")
+
+    if failures:
+        raise RuntimeError(
+            "One or more UDP script scans failed:\n" + "\n".join(failures)
+        )
+
+    write_to_log_file("All UDP script scans completed successfully")
 
 
 def run_discovery_scans(args: argparse.Namespace) -> None:
@@ -224,7 +448,6 @@ def run_discovery_scans(args: argparse.Namespace) -> None:
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=len(scans)
     ) as executor:
-
         futures = {
             executor.submit(
                 run_nmap_scan,
@@ -234,23 +457,19 @@ def run_discovery_scans(args: argparse.Namespace) -> None:
                 scan["output_prefix"],
                 args.pn
             ): scan_name
-
             for scan_name, scan in scans.items()
         }
 
         for future in concurrent.futures.as_completed(futures):
             scan_name = futures[future]
-
             try:
                 future.result()
-
             except (OSError, subprocess.CalledProcessError, RuntimeError) as error:
                 failures.append(f"{scan_name}: {error}")
 
     if failures:
         raise RuntimeError(
-            "One or more discovery scans failed:\n"
-            + "\n".join(failures)
+            "One or more discovery scans failed:\n" + "\n".join(failures)
         )
 
     write_to_log_file("All discovery scans completed successfully")
@@ -273,12 +492,13 @@ def main(args: argparse.Namespace) -> int:
         try:
             NMAP_LOCATION = check_nmap_availability()
 
-            now_str = datetime.datetime.now().strftime(
-                "%Y-%m-%d_%H-%M-%S"
-            )
+            now_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             args.output_dir = Path(f"{args.output_dir}_{now_str}")
 
             run_discovery_scans(args)
+
+            discovered_services = generate_services_summary(args.output_dir)
+            run_udp_script_scans(discovered_services["udp"], args)
 
         finally:
             end_log_file()
