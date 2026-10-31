@@ -87,16 +87,16 @@ def check_nmap_availability() -> str:
 
 #---------- Target handling ----------#
 
-def resolve_targets(targets: list[str]) -> tuple[list[str], str]:
+def resolve_targets(targets: list[str]) -> list[str]:
     """Resolve targets as individual arguments or an Nmap input file."""
 
     if len(targets) != 1:
-        return targets, ", ".join(targets)
+        return targets
 
     target_path = Path(targets[0])
 
     if not target_path.exists():
-        return targets, targets[0]
+        return targets
 
     if not target_path.is_file():
         raise ValueError(
@@ -108,10 +108,19 @@ def resolve_targets(targets: list[str]) -> tuple[list[str], str]:
             f"Target file is not readable: {target_path}"
         )
 
-    target_arguments = ["-iL", str(target_path)]
+    return ["-iL", str(target_path)]
 
-    return target_arguments, f"target file: {target_path}"
 
+def get_target_description(targets: list[str]):
+    if len(targets) != 1:
+        return ", ".join(targets)
+
+    target_path = Path(targets[0])
+
+    if not target_path.exists():
+        return targets[0]
+
+    return f"target file: {target_path}"
 
 #---------- Target handling ----------#
 
@@ -134,7 +143,9 @@ def run_nmap_scan(
 
     command.extend(scan_options)
     command.extend(["-oA", str(output_prefix)])
-    command.extend(target_arguments)
+
+    resolved_targets = resolve_targets(target_arguments)
+    command.extend(resolved_targets)
 
     write_to_log_file(
         f"Starting {scan_name} scan with command {shlex.join(command)}"
@@ -166,10 +177,10 @@ def run_discovery_scans(args: argparse.Namespace) -> None:
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    target_arguments, target_description = resolve_targets(args.target)
+    target_description = get_target_description(args.target)
 
     write_to_log_file(
-        f"Starting parallel discovery scans on {target_description}"
+        f"Starting parallel TCP and UDP discovery scans on {target_description}"
     )
     write_to_log_file(f"Output directory: {output_dir}")
 
@@ -219,7 +230,7 @@ def run_discovery_scans(args: argparse.Namespace) -> None:
                 run_nmap_scan,
                 scan_name,
                 scan["scan_options"],
-                target_arguments,
+                args.target,
                 scan["output_prefix"],
                 args.pn
             ): scan_name
