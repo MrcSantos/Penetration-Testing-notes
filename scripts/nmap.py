@@ -111,7 +111,7 @@ def resolve_targets(targets: list[str]) -> list[str]:
     return ["-iL", str(target_path)]
 
 
-def get_target_description(targets: list[str]):
+def get_target_description(targets: list[str]) -> str:
     if len(targets) != 1:
         return ", ".join(targets)
 
