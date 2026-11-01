@@ -111,7 +111,7 @@ def resolve_targets(targets: list[str]) -> list[str]:
     return ["-iL", str(target_path)]
 
 
-def get_target_description(targets: list[str]) -> str:
+def get_target_description_from_args(targets: list[str]) -> str:
     """Return a readable description of the requested targets."""
 
     if len(targets) != 1:
@@ -124,6 +124,9 @@ def get_target_description(targets: list[str]) -> str:
 
     return f"target file: {target_path}"
 
+
+def get_target_description_from_discovered_services(discovered_services: dict[str, list[int]]) -> str:
+    return ", ".join(discovered_services)
 
 #---------- Target handling ----------#
 
@@ -260,6 +263,9 @@ def run_nmap_scan(
     if skip_host_discovery:
         command.append("-Pn")
 
+    print(scan_options)
+    print(command)
+
     command.extend(scan_options)
     command.extend(["-oA", str(output_prefix)])
 
@@ -271,6 +277,8 @@ def run_nmap_scan(
     )
 
     try:
+        print(command)
+
         subprocess.run(command, check=True)
 
     except (OSError, subprocess.CalledProcessError) as error:
@@ -291,54 +299,13 @@ def run_nmap_scan(
     write_to_log_file(f"XML output: {xml_output_file}")
 
 
-def run_udp_script_scan(
-    host: str,
-    ports: list[int],
-    script_categories: str,
-    output_dir: Path
-) -> None:
-    """Run a UDP script scan against one host's discovered open UDP ports."""
-
-    if not ports:
-        write_to_log_file(f"Skipping UDP script scan for {host}: no open UDP ports")
-        return
-
-    output_prefix = output_dir / f"udp_scripts_{host.replace(':', '_')}"
-    port_list = ",".join(str(port) for port in sorted(set(ports)))
-
-    command = [
-        NMAP_LOCATION,
-        "-Pn",
-        "-sU",
-        "-p", port_list,
-        "--script", script_categories,
-        "-oA", str(output_prefix),
-        host
-    ]
-
-    write_to_log_file(
-        f"Starting UDP script scan for {host} on ports {port_list} "
-        f"with scripts {script_categories}"
-    )
-    write_to_log_file(f"Command: {shlex.join(command)}")
-
-    try:
-        subprocess.run(command, check=True)
-    except (OSError, subprocess.CalledProcessError) as error:
-        write_to_log_file(f"UDP script scan failed for {host}: {error}")
-        raise
-
-    xml_output_file = Path(f"{output_prefix}.xml")
-    if not xml_output_file.is_file():
-        error_message = (
-            f"UDP script scan for {host} completed but XML output was not found: "
-            f"{xml_output_file}"
-        )
-        write_to_log_file(error_message)
-        raise RuntimeError(error_message)
-
-    write_to_log_file(f"UDP script scan completed successfully for {host}")
-    write_to_log_file(f"XML output: {xml_output_file}")
+def get_hosts_to_scan_from_discovered_services(discovered_services: dict[str, list[int]]) -> dict[str, list[int]]:
+    # Dictionary comprehension to remove hosts with empty ports
+    return {
+        host: ports
+        for host, ports in discovered_services.items()
+        if ports
+    }
 
 
 def run_udp_script_scans(
@@ -346,17 +313,9 @@ def run_udp_script_scans(
     args: argparse.Namespace
 ) -> None:
     """Run one UDP script scan per host with confirmed open UDP ports."""
+    output_dir = args.output_dir
 
-    if args.s:
-        script_categories = "default,safe"
-    else:
-        script_categories = "default,discovery,safe,auth,vuln"
-
-    hosts_to_scan = {
-        host: ports
-        for host, ports in discovered_udp_services.items()
-        if ports
-    }
+    hosts_to_scan = get_hosts_to_scan_from_discovered_services(discovered_udp_services)
 
     if not hosts_to_scan:
         write_to_log_file(
@@ -364,32 +323,75 @@ def run_udp_script_scans(
         )
         return
 
+    target_description = get_target_description_from_discovered_services(discovered_udp_services)
+
+    write_to_log_file(
+        f"Starting parallel UDP script scans on {target_description}"
+    )
+
+    scans = []
+
+    for host, ports in discovered_udp_services.items():
+        scan = {}
+        scan_options = []
+        # Convert to string before join or else throws error
+        ports_str_csv = ",".join(str(port) for port in ports)
+        ports_str = "-p {}".format(ports_str_csv)
+
+        if args.s:
+
+            scan_options = [
+                "-sU",
+                "-sV",
+                ports_str,
+                "-T2",
+                "--script=default,safe"
+            ]
+        else:
+            scan_options = [
+                "-sU",
+                "-sV",
+                ports_str,
+                "--min-rate", "2000",
+                "--script=default,discovery,safe,auth,vuln"
+            ]
+
+        scan["name"] = host
+        # Encapsulated in array because in run_nmap_scan it is an array of targets
+        scan["targets"] = [host]
+        scan["options"] = scan_options
+        scan["output_prefix"] = output_dir / f"scripts_udp_{host}"
+
+        scans.append(scan)
+
+
     failures = []
 
     with concurrent.futures.ThreadPoolExecutor(
-        max_workers=min(len(hosts_to_scan), 4)
+        max_workers=min(len(hosts_to_scan), 5)
     ) as executor:
         futures = {
             executor.submit(
-                run_udp_script_scan,
-                host,
-                ports,
-                script_categories,
-                args.output_dir
-            ): host
-            for host, ports in hosts_to_scan.items()
+                run_nmap_scan,
+                scan["name"],
+                scan["options"],
+                scan["targets"],
+                scan["output_prefix"],
+                skip_host_discovery=True
+            ):scan["name"]
+            for scan in scans
         }
 
         for future in concurrent.futures.as_completed(futures):
-            host = futures[future]
+            scan_name = futures[future]
             try:
                 future.result()
             except (OSError, subprocess.CalledProcessError, RuntimeError) as error:
-                failures.append(f"{host}: {error}")
+                failures.append(f"{scan_name}: {error}")
 
     if failures:
         raise RuntimeError(
-            "One or more UDP script scans failed:\n" + "\n".join(failures)
+            "One or more script scans failed:\n" + "\n".join(failures)
         )
 
     write_to_log_file("All UDP script scans completed successfully")
@@ -401,12 +403,11 @@ def run_discovery_scans(args: argparse.Namespace) -> None:
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    target_description = get_target_description(args.target)
+    target_description = get_target_description_from_args(args.target)
 
     write_to_log_file(
         f"Starting parallel TCP and UDP discovery scans on {target_description}"
     )
-    write_to_log_file(f"Output directory: {output_dir}")
 
     if args.s:
         scans = {
@@ -494,6 +495,7 @@ def main(args: argparse.Namespace) -> int:
 
             now_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             args.output_dir = Path(f"{args.output_dir}_{now_str}")
+            write_to_log_file(f"Output directory: {args.output_dir}", write_timestamp=False)
 
             run_discovery_scans(args)
 
