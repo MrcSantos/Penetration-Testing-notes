@@ -263,9 +263,6 @@ def run_nmap_scan(
     if skip_host_discovery:
         command.append("-Pn")
 
-    print(scan_options)
-    print(command)
-
     command.extend(scan_options)
     command.extend(["-oA", str(output_prefix)])
 
@@ -277,8 +274,6 @@ def run_nmap_scan(
     )
 
     try:
-        print(command)
-
         subprocess.run(command, check=True)
 
     except (OSError, subprocess.CalledProcessError) as error:
@@ -336,7 +331,7 @@ def run_udp_script_scans(
         scan_options = []
         # Convert to string before join or else throws error
         ports_str_csv = ",".join(str(port) for port in ports)
-        ports_str = "-p {}".format(ports_str_csv)
+        ports_str = f"-p {ports_str_csv}"
 
         if args.s:
 
