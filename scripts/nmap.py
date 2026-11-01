@@ -334,7 +334,6 @@ def run_udp_script_scans(
         ports_str = f"-p {ports_str_csv}"
 
         if args.s:
-
             scan_options = [
                 "-sU",
                 "-sV",
@@ -386,10 +385,98 @@ def run_udp_script_scans(
 
     if failures:
         raise RuntimeError(
-            "One or more script scans failed:\n" + "\n".join(failures)
+            "One or more UDP script scans failed:\n" + "\n".join(failures)
         )
 
     write_to_log_file("All UDP script scans completed successfully")
+
+
+def run_tcp_script_scans(
+    discovered_tcp_services: dict[str, list[int]],
+    args: argparse.Namespace
+) -> None:
+    """Run one TCP script scan per host with confirmed open TCP ports."""
+    output_dir = args.output_dir
+
+    hosts_to_scan = get_hosts_to_scan_from_discovered_services(discovered_tcp_services)
+
+    if not hosts_to_scan:
+        write_to_log_file(
+            "No confirmed open TCP ports found; skipping TCP script scans"
+        )
+        return
+
+    target_description = get_target_description_from_discovered_services(discovered_tcp_services)
+
+    write_to_log_file(
+        f"Starting parallel TCP script scans on {target_description}"
+    )
+
+    scans = []
+
+    for host, ports in discovered_tcp_services.items():
+        scan = {}
+        scan_options = []
+        # Convert to string before join or else throws error
+        ports_str_csv = ",".join(str(port) for port in ports)
+        ports_str = f"-p {ports_str_csv}"
+
+        if args.s:
+            scan_options = [
+                "-sT",
+                "-sV",
+                ports_str,
+                "-T2",
+                "--script=default,safe"
+            ]
+        else:
+            scan_options = [
+                "-sT",
+                "-sV",
+                ports_str,
+                "--min-rate", "2000",
+                "--script=default,discovery,safe,auth,vuln"
+            ]
+
+        scan["name"] = host
+        # Encapsulated in array because in run_nmap_scan it is an array of targets
+        scan["targets"] = [host]
+        scan["options"] = scan_options
+        scan["output_prefix"] = output_dir / f"scripts_tcp_{host}"
+
+        scans.append(scan)
+
+
+    failures = []
+
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=min(len(hosts_to_scan), 5)
+    ) as executor:
+        futures = {
+            executor.submit(
+                run_nmap_scan,
+                scan["name"],
+                scan["options"],
+                scan["targets"],
+                scan["output_prefix"],
+                skip_host_discovery=True
+            ):scan["name"]
+            for scan in scans
+        }
+
+        for future in concurrent.futures.as_completed(futures):
+            scan_name = futures[future]
+            try:
+                future.result()
+            except (OSError, subprocess.CalledProcessError, RuntimeError) as error:
+                failures.append(f"{scan_name}: {error}")
+
+    if failures:
+        raise RuntimeError(
+            "One or more TCP script scans failed:\n" + "\n".join(failures)
+        )
+
+    write_to_log_file("All TCP script scans completed successfully")
 
 
 def run_discovery_scans(args: argparse.Namespace) -> None:
@@ -496,6 +583,7 @@ def main(args: argparse.Namespace) -> int:
 
             discovered_services = generate_services_summary(args.output_dir)
             run_udp_script_scans(discovered_services["udp"], args)
+            run_tcp_script_scans(discovered_services["tcp"], args)
 
         finally:
             end_log_file()
